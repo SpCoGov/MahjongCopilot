@@ -7,6 +7,7 @@ The BotManager class is run in a separate thread, and provide interface methods 
 import time
 import queue
 import threading
+import json
 
 from game.browser import GameBrowser
 from game.game_state import GameState
@@ -26,9 +27,11 @@ from bot import Bot, get_bot
 METHODS_TO_IGNORE = [
     liqi.LiqiMethod.checkNetworkDelay,
     liqi.LiqiMethod.heartbeat,
+    liqi.LiqiMethod.routeHeartbeat,
     liqi.LiqiMethod.loginBeat,
     liqi.LiqiMethod.fetchAccountActivityData,
     liqi.LiqiMethod.fetchServerTime,
+    liqi.LiqiMethod.oauth2Login,
 ]
 
 class BotManager:
@@ -359,9 +362,9 @@ class BotManager:
             liqi_id = liqimsg.get("id")
             liqi_type = liqimsg.get('type')
             liqi_method = liqimsg.get('method')
-            # liqi_data = liqimsg['data']
+            liqi_data = liqimsg['data']
             # liqi_datalen = len(liqimsg['data'])
-            
+
             if liqi_method in METHODS_TO_IGNORE:
                 ...
             
@@ -399,7 +402,19 @@ class BotManager:
                     self._process_idle_automation(liqimsg)
                 # if self.game_state.is_game_ended:
                 #     self._process_end_game()
-            
+
+            elif 'amulet' in liqi_method.lower():
+                if liqi_type != liqi.MsgType.RES:
+                    return
+                LOGGER.debug('Sky-High Ambition msg: %s', dump_liqi_msg_str(liqimsg))
+                if liqi_method == liqi.LiqiMethod.fetchAmuletActivityData:
+                    game = liqi_data['data']['game']
+                    if game is not None:
+                        LOGGER.debug('has old game data: %s', str(game))
+                    else:
+                        LOGGER.debug('has no old game data')
+
+
             elif msg.flow_id == self.lobby_flow_id:
                 LOGGER.debug(
                     'Lobby msg(suppressed): id=%s, type=%s, method=%s, len=%d',
@@ -498,6 +513,60 @@ class BotManager:
             self.automation.automate_action(reaction, self.game_state)
         except Exception as e:
             LOGGER.error("Failed to automate action for %s: %s", reaction['type'], e, exc_info=True)
+
+def dump_liqi_msg_str(liqimsg) -> str:
+    """把 liqimsg 转成单行 JSON 字符串；布尔为 true/false。"""
+
+    def to_jsonable(o):
+        # 基础类型直接返回（包括 bool -> 会被正确序列化为 true/false）
+        if o is None or isinstance(o, (str, int, float, bool)):
+            return o
+
+        # dict
+        if isinstance(o, dict):
+            return {str(k): to_jsonable(v) for k, v in o.items()}
+
+        # list/tuple/set
+        if isinstance(o, (list, tuple, set)):
+            return [to_jsonable(x) for x in o]
+
+        # protobuf Message（如可用就走官方转换，字段名保持原样）
+        try:
+            from google.protobuf.message import Message
+            from google.protobuf.json_format import MessageToDict
+            if isinstance(o, Message):
+                return MessageToDict(o, preserving_proto_field_name=True)
+        except Exception:
+            pass
+
+        # numpy 标量类型（若环境里有 numpy）
+        try:
+            import numpy as np
+            if isinstance(o, np.bool_):
+                return bool(o)
+            if isinstance(o, np.integer):
+                return int(o)
+            if isinstance(o, np.floating):
+                return float(o)
+        except Exception:
+            pass
+
+        # Enum
+        try:
+            from enum import Enum
+            if isinstance(o, Enum):
+                return o.name
+        except Exception:
+            pass
+
+        # 兜底：转字符串（只在万不得已时）
+        return str(o)
+
+    try:
+        payload = to_jsonable(liqimsg)
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    except Exception as e:
+        return f"<Failed to dump liqimsg: {e}>"
 
 
 def mjai_reaction_2_guide(reaction:dict, max_options:int=3, lan_str:LanStr=LanStr()) -> tuple[str, list]:

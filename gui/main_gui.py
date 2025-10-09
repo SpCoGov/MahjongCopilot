@@ -252,18 +252,15 @@ class MainGUI(tk.Tk):
         
     
     def _on_exit(self):
-        # Exit the app
-        # pop up that confirm if the user really wants to quit
-        if messagebox.askokcancel(self.st.lan().EXIT, self.st.lan().EIXT_CONFIRM, parent=self):
-            try:
-                LOGGER.info("Exiting GUI and program")
-                self.status_bar.update_column(2, self.st.lan().EXIT + "ing...", self.icon_yellow)
-                self.update_idletasks()
-                self.st.save_json()
-                self.bot_manager.stop(True)
-            except: #pylint:disable=bare-except
-                pass
-            self.quit()
+        try:
+            LOGGER.info("Exiting GUI and program")
+            self.status_bar.update_column(2, self.st.lan().EXIT + "ing...", self.icon_yellow)
+            self.update_idletasks()
+            self.st.save_json()
+            self.bot_manager.stop(True)
+        except:  # pylint:disable=bare-except
+            pass
+        self.quit()
             
             
     def reload_gui(self):

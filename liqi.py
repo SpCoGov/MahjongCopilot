@@ -27,7 +27,8 @@ class MsgType(Enum):
 
 class LiqiMethod:
     """ method string constants"""
-    heartbeat                   = '.lq.Lobby.heatbeat'
+    heartbeat                   = '.lq.Lobby.heartbeat'
+    routeHeartbeat              = '.lq.Route.heartbeat'
     loginBeat                   = '.lq.Lobby.loginBeat'
     fetchAccountActivityData    = '.lq.Lobby.fetchAccountActivityData'
     fetchServerTime             = '.lq.Lobby.fetchServerTime'
@@ -44,6 +45,25 @@ class LiqiMethod:
     NotifyGameEndResult         = '.lq.NotifyGameEndResult'
     NotifyGameBroadcast         = '.lq.NotifyGameBroadcast'     # player sent emoji
 
+    fetchAmuletActivityData     = '.lq.Lobby.fetchAmuletActivityData'
+    amuletActivityFetchBrief    = '.lq.Lobby.amuletActivityFetchBrief'
+    amuletActivityStartGame     = '.lq.Lobby.amuletActivityStartGame'
+    amuletActivityOperate       = '.lq.Lobby.amuletActivityOperate'
+    amuletActivityUpgrade       = '.lq.Lobby.amuletActivityUpgrade'
+    amuletActivityBuy           = '.lq.Lobby.amuletActivityBuy'
+    amuletActivitySelectPack    = '.lq.Lobby.amuletActivitySelectPack'
+    amuletActivitySellEffect    = '.lq.Lobby.amuletActivitySellEffect'
+    amuletActivityEffectSort    = '.lq.Lobby.amuletActivityEffectSort'
+    amuletActivityGiveup        = '.lq.Lobby.amuletActivityGiveup'
+    amuletActivityRefreshShop   = '.lq.Lobby.amuletActivityRefreshShop'
+    amuletActivitySelectFreeEffect='.lq.Lobby.amuletActivitySelectFreeEffect'
+    amuletActivityUpgradeShopBuff='.lq.Lobby.amuletActivityUpgradeShopBuff'
+    amuletActivityEndShopping   = '.lq.Lobby.amuletActivityEndShopping'
+    amuletActivitySetSkillLevel = '.lq.Lobby.amuletActivitySetSkillLevel'
+    amuletActivityMaintainInfo  = '.lq.Lobby.amuletActivityMaintainInfo'
+    amuletActivitySelectRewardPack='.lq.Lobby.amuletActivitySelectRewardPack'
+    amuletActivitySelectBookEffect='.lq.Lobby.amuletActivitySelectBookEffect'
+
 class LiqiAction:
     """ Liqi msg ['data']['name'] string consts for method==ActionPrototype"""
     NewRound = 'ActionNewRound'
@@ -55,8 +75,8 @@ class LiqiAction:
     Hule = 'ActionHule'
     NoTile = 'ActionNoTile'
     LiuJu = 'ActionLiuJu'
-    MJStart = 'ActionMJStart' 
-    
+    MJStart = 'ActionMJStart'
+
 
 keys = [0x84, 0x5e, 0x4e, 0x42, 0x39, 0xa2, 0x1f, 0x60, 0x1c]
 
@@ -129,7 +149,7 @@ class LiqiProto:
                 assert(msg_id < 1 << 16)
                 assert(len(msg_block) == 2)
                 # assert(msg_id not in self.res_type)
-                method_name = msg_block[0]['data'].decode()                
+                method_name = msg_block[0]['data'].decode()
                 _, lq, service, rpc = method_name.split('.')
                 proto_domain = self.jsonProto['nested'][lq]['nested'][service]['methods'][rpc]
                 liqi_pb2_req = getattr(pb, proto_domain['requestType'])
@@ -151,7 +171,7 @@ class LiqiProto:
                 'method': method_name, 'data': dict_obj}
         self.tot += 1
         return result
-    
+
     def parse_syncGame(self, liqi_data):
         """ sync game
         params:
@@ -171,7 +191,7 @@ class LiqiProto:
                   'method': '.lq.ActionPrototype', 'data': dict_obj}
         return result
 
-    
+
     def compose(self, data, msg_id=-1):
         """ compose liqi req/res message from dict data"""
         if data['type'] == MsgType.NOTIFY:
