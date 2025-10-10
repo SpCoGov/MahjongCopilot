@@ -10,7 +10,7 @@ import threading
 import json
 
 from game.browser import GameBrowser
-from game.game_state import GameState
+from game.MahjongGameState import MahjongGameState
 from game.automation import Automation, UiState, JOIN_GAME, END_GAME
 import mitm
 import proxinject
@@ -38,7 +38,7 @@ class BotManager:
     """ Bot logic manager"""
     def __init__(self, setting:Settings) -> None:
         self.st = setting
-        self.game_state:GameState = None
+        self.game_state:MahjongGameState = None
 
         self.liqi_parser = liqi.LiqiProto()
         self.mitm_server:mitm.MitmController = mitm.MitmController()      # no domain restrictions for now
@@ -59,8 +59,21 @@ class BotManager:
         self.is_loading_bot:bool = False                # is bot being loaded
         self.main_thread_exception:Exception = None     # Exception that had stopped the main thread
         self.game_exception:Exception = None            # game run time error (but does not break main thread)        
-        
-        
+        self._amulet_active: bool = False
+        self._amulet_info: dict = {
+            "stage": 0,
+            "hands": [],
+            "desktop_remain": 0,
+            "ended": False,
+        }
+        self._amulet_pending_action: dict | None = None
+        self._amulet_pool: list[dict] | None = None  # 108张：[{"id":72,"tile":"9m"}, ...]
+        self._amulet_draw_ids: list[int] = []  # 中段36张的牌 id（按顺序）
+        self._amulet_used_ids: set[int] = set()  # usedDesktop 累积的牌 id
+        self._amulet_desktop_remain: int = 0  # desktopRemain（服务器口径）
+        self._amulet_replace_ids: list[int] = []  # 尾部49张：用于换牌阶段的待替换队列（按顺序）
+        self._amulet_replace_cursor: int = 0      # 已消耗（已从队列取走）的数量
+
     def start(self):
         """ Start bot manager thread"""
         self._thread = threading.Thread(
@@ -69,53 +82,53 @@ class BotManager:
             daemon=True
         )
         self._thread.start()
-        
-    
+
+
     def stop(self, join_thread:bool):
         """ Stop bot manager thread"""
         self._stop_event.set()
         if join_thread:
             self._thread.join()
-            
-        
+
+
     def is_running(self) -> bool:
         """ return True if bot manager thread is running"""
         if self._thread and self._thread.is_alive():
             return True
         else:
             return False
-        
-                
+
+
     def is_in_game(self) -> bool:
         """ return True if the bot is currently in a game """
         if self.game_state:
             return True
         else:
             return False
-        
-        
+
+
     def get_game_info(self) -> GameInfo:
         """ Get gameinfo derived from game_state. can be None"""
         if self.game_state is None:
             return None
-        
+
         return self.game_state.get_game_info()
-    
-    
+
+
     def is_game_syncing(self) -> bool:
         """ is mjai syncing game messages (from disconnection) """
         if self.game_state:
             return self.game_state.is_ms_syncing
-        
-    
+
+
     def get_game_error(self) -> Exception:
-        """ return game error msg if any, or none if not  
+        """ return game error msg if any, or none if not
         These are errors that do not break the main thread, but main impact individual games
-        e.g. game state error / ai bot error   
-        """  
+        e.g. game state error / ai bot error
+        """
         return self.game_exception
-    
-    
+
+
     def get_game_client_type(self) -> utils.GameClientType:
         """ return the running game client type. return None if none is running"""
         if self.browser.is_running():
@@ -123,14 +136,14 @@ class BotManager:
         elif self.lobby_flow_id or self.game_flow_id:
             return utils.GameClientType.PROXY
         else:
-            return None        
-        
+            return None
+
     def start_browser(self):
         """ Start the browser thread, open browser window """
         ms_url = self.st.ms_url
         proxy = self.mitm_server.proxy_str
         self.browser.start(ms_url, proxy, self.st.browser_width, self.st.browser_height, self.st.enable_chrome_ext)
-    
+
     def is_browser_zoom_off(self):
         """ check browser zoom level, return true if zoomlevel is not 1"""
         if self.browser and self.browser.is_page_normal():
@@ -139,22 +152,22 @@ class BotManager:
                 if abs(zoom - 1) > 0.001:
                     return True
         return False
-        
-    # mitm restart not working for now. disable this.        
+
+    # mitm restart not working for now. disable this.
     # def set_mitm_proxinject_update(self):
     #     """ restart mitm proxy server"""
     #     self.mitm_proxinject_need_update = True
-        
-        
+
+
     def set_bot_update(self):
         """ mark bot needs update"""
         self.bot_need_update = True
-        
-    
+
+
     def is_bot_created(self):
         """ return true if self.bot is not None"""
         return self.bot is not None
-        
+
 
     def is_bot_calculating(self):
         """ return true if bot is calculating"""
@@ -162,56 +175,56 @@ class BotManager:
             return True
         else:
             return False
-        
-        
+
+
     def get_pending_reaction(self) -> dict:
         """ returns the pending mjai output reaction (which hasn't been acted on)"""
         if self.game_state:
-            reaction = self.game_state.get_pending_reaction()                      
+            reaction = self.game_state.get_pending_reaction()
             return reaction
         else:   # None
             return None
-        
-    
+
+
     def enable_overlay(self):
         """ Start the overlay thread"""
         LOGGER.debug("Bot Manager enabling overlay")
         self.st.enable_overlay = True
-        
-            
+
+
     def disable_overlay(self):
         """ disable browser overlay"""
         LOGGER.debug("Bot Manager disabling overlay")
         self.st.enable_overlay = False
-        
-    
+
+
     def update_overlay(self):
         """ update the overlay if conditions are met"""
         if self._update_overlay_conditions_met():
             self._update_overlay_guide()
             self._update_overlay_botleft()
-            
-        
+
+
     def enable_automation(self):
         """ enable automation"""
         LOGGER.debug("Bot Manager enabling automation")
         self.st.enable_automation = True
         self.automation.decide_lobby_action()
-        
-        
+
+
     def disable_automation(self):
         """ disable automation"""
         LOGGER.debug("Bot Manager disabling automation")
         self.st.enable_automation = False
         self.automation.stop_previous()
-        
-        
+
+
     def enable_autojoin(self):
         """ enable autojoin"""
         LOGGER.debug("Enabling Auto Join")
         self.st.auto_join_game = True
-        
-        
+
+
     def disable_autojoin(self):
         """ disable autojoin"""
         LOGGER.debug("Disabling Auto Join")
@@ -221,10 +234,10 @@ class BotManager:
             name, _d = self.automation.running_task_info()
             if name in (JOIN_GAME, END_GAME):
                 self.automation.stop_previous()
-        
+
     def _create_bot(self):
         """ create Bot object based on settings"""
-        try:            
+        try:
             self.is_loading_bot = True
             self.bot = None
             self.bot = get_bot(self.st)
@@ -235,7 +248,7 @@ class BotManager:
             self.bot = None
             self.game_exception = e
         self.is_loading_bot = False
-        
+
     def _create_mitm_and_proxinject(self):
         # create mitm and proxinject threads
         # enable proxyinject requires socks5, which disables upstream proxy
@@ -249,10 +262,10 @@ class BotManager:
         res = self.mitm_server.install_mitm_cert()
         if not res:
             self.main_thread_exception = utils.MitmCertNotInstalled(self.mitm_server.cert_file)
-        
+
         if self.st.enable_proxinject:
             self.proxy_injector.start(self.st.inject_process_name, "127.0.0.1", self.st.mitm_port)
-        
+
 
     def _run(self):
         """ Keep running the main loop (blocking)"""
@@ -265,38 +278,38 @@ class BotManager:
                 # keep processing majsoul game messages forwarded from mitm server
                 self.fps_counter.frame()
                 self._loop_pre_msg()
-                try:                    
+                try:
                     msg = self.mitm_server.get_message()
-                    self._process_msg(msg)                                  
+                    self._process_msg(msg)
                 except queue.Empty:
                     time.sleep(0.002)
                 except Exception as e:
                     LOGGER.error("Error processing msg: %s",e, exc_info=True)
-                    self.game_exception = e                    
+                    self.game_exception = e
                 self._loop_post_msg()
-                                    
+
             # loop ended, clean up before exit
             LOGGER.info("Shutting down browser")
-            self.browser.stop(True)                
+            self.browser.stop(True)
             LOGGER.info("Shutting down MITM")
             self.mitm_server.stop()
             if self.proxy_injector.is_running():
                 LOGGER.info("Shutting down proxy injector")
                 self.proxy_injector.stop(True)
-            LOGGER.info("Bot manager thread ending.")         
-            
+            LOGGER.info("Bot manager thread ending.")
+
         except Exception as e:
             self.main_thread_exception = e
             LOGGER.error("Bot Manager Thread Exception: %s", e, exc_info=True)
-            
-    
+
+
     def _loop_pre_msg(self):
         """ things to do every loop before processing msg"""
         #  update bot if needed
         if self.bot_need_update and self.is_in_game() is False:
             self._create_bot()
             self.bot_need_update = False
-            
+
         # update mitm if needed: when no one is using mitm
         if self.mitm_proxinject_need_update:
             if not (self.browser.is_running()):
@@ -305,8 +318,8 @@ class BotManager:
                 self.mitm_server.stop()
                 self._create_mitm_and_proxinject()
                 self.mitm_proxinject_need_update = False
-        
-                
+
+
     def _loop_post_msg(self):
         # things to do in every loop after processing msg
         # check mitm
@@ -315,7 +328,7 @@ class BotManager:
         else:   # clear exception
             if isinstance(self.game_exception, utils.MITMException):
                 self.game_exception = None
-                
+
         # check overlay
         if self.browser and self.browser.is_page_normal():
             if self.st.enable_overlay:
@@ -327,19 +340,256 @@ class BotManager:
                 if self.browser.is_overlay_working():
                     LOGGER.debug("Bot manager turning off browser overlay")
                     self.browser.stop_overlay()
-        
+
         self.automation.automate_retry_pending(self.game_state)            # retry failed automation
-        
+
         if not self.game_exception:     # skip on game error
             self.automation.decide_lobby_action()
-            
-        
+
+    def _amulet_on_fetch_data(self, liqi_data: dict) -> None:
+        game = (liqi_data.get('data') or {}).get('game')
+        if not game:
+            return
+        round_obj = game.get('round') or {}
+        pool = round_obj.get('pool') or []
+        if pool:
+            self._amulet_set_pool_from_array(pool)
+        # 初始化 GUI 可见的 amulet 简要信息（stage/hands/desktop_remain/ended）
+        try:
+            game_obj = liqi_data.get('data', {}).get('game', {})
+            round_obj2 = (game_obj.get('round') or {})
+            # stage / ended
+            self._amulet_info['stage'] = int(game_obj.get('stage') or 0)
+            self._amulet_info['ended'] = bool(game_obj.get('ended') or False)
+            # hands
+            hands_init = round_obj2.get('hands') or []
+            if isinstance(hands_init, list):
+                self._amulet_info['hands'] = list(hands_init)
+            # desktopRemain
+            if 'desktopRemain' in round_obj2:
+                dr = int(round_obj2.get('desktopRemain') or 0)
+                self._amulet_info['desktop_remain'] = dr
+        except Exception:
+            pass
+        # 采纳旧局的 usedDesktop
+        used = set(round_obj.get('usedDesktop') or [])
+        self._amulet_used_ids = {int(x) for x in used}
+        # 同步服务器剩余
+        self._amulet_desktop_remain = int(round_obj.get('desktopRemain') or 0)
+        # 若旧局里已有换牌记录，used 为累计替换掉的牌（长度即为游标）
+        used_replace = round_obj.get('used') or []
+        try:
+            if isinstance(used_replace, list):
+                self._amulet_replace_cursor = len(used_replace)
+        except Exception:
+            pass
+
+    def _amulet_on_upgrade_events(self, events: list[dict]) -> None:
+        """amuletActivityUpgrade：events 里某个 event 的 valueChanges.round.pool.value 是 108 张对象数组"""
+        for ev in events:
+            vc = ev.get("valueChanges") or {}
+            rd = vc.get("round") or {}
+            pool = rd.get("pool") or {}
+            if isinstance(pool, dict) and pool.get("dirty") and isinstance(pool.get("value"), list):
+                self._amulet_set_pool_from_array(pool["value"])
+            # 也顺手拿 desktopRemain
+            dr = rd.get("desktopRemain")
+            if isinstance(dr, dict) and dr.get("dirty"):
+                self._amulet_desktop_remain = int(dr.get("value") or 0)
+            used_rep = rd.get("used")
+            if isinstance(used_rep, dict) and used_rep.get("dirty"):
+                vals = used_rep.get("value") or []
+                try:
+                    self._amulet_replace_cursor = len(vals)
+                except Exception:
+                    pass
+        # 同步 GUI 简要信息
+        try:
+            self._amulet_update_from_events(events)
+        except Exception:
+            pass
+
+    def _amulet_on_operate_events(self, events: list[dict]) -> None:
+        """amuletActivityOperate：刷新 usedDesktop / hands / desktopRemain 等"""
+        for ev in events:
+            vc = ev.get("valueChanges") or {}
+            rd = vc.get("round") or {}
+            # usedDesktop 是“已摸出”的牌 id（来自中段36张）
+            used = rd.get("usedDesktop")
+            if isinstance(used, dict) and used.get("dirty"):
+                vals = used.get("value") or []
+                # 服务端给的是“当前所有已用”的集合，直接覆盖更稳妥
+                self._amulet_used_ids = set(int(x) for x in vals)
+
+            # 桌面剩余
+            dr = rd.get("desktopRemain")
+            if isinstance(dr, dict) and dr.get("dirty"):
+                self._amulet_desktop_remain = int(dr.get("value") or 0)
+
+            # 换牌阶段的 used（累计被替换掉的手牌 id）——长度即游标
+            used_rep = rd.get("used")
+            if isinstance(used_rep, dict) and used_rep.get("dirty"):
+                vals = used_rep.get("value") or []
+                try:
+                    self._amulet_replace_cursor = len(vals)
+                except Exception:
+                    pass
+            # hands 你若想显示也可以存，但不影响“可摸剩余”的计算
+            # hands = rd.get("hands")
+            # if isinstance(hands, dict) and hands.get("dirty"):
+            #     self._amulet_hands_ids = list(hands.get("value") or [])
+        # 同步 GUI 简要信息
+        try:
+            self._amulet_update_from_events(events)
+        except Exception:
+            pass
+
+    def _amulet_set_pool_from_array(self, pool: list[dict]) -> None:
+        """设置 108 张牌山，并切出中段36张（可摸段）与尾部49张（换牌队列）的 id 顺序"""
+        self._amulet_pool = pool[:]  # 浅拷贝
+        if len(self._amulet_pool) != 108:
+            LOGGER.warning("Amulet pool length unexpected: %s", len(self._amulet_pool))
+        # 可摸段：索引 23~58（切片上界 59）
+        draw_start, draw_end = 23, 59
+        draw_slice = self._amulet_pool[draw_start:draw_end]
+        self._amulet_draw_ids = [int(x.get("id")) for x in draw_slice if isinstance(x, dict) and "id" in x]
+        # 换牌队列：索引 59~107（切片上界 108）
+        rep_start, rep_end = 59, 108
+        rep_slice = self._amulet_pool[rep_start:rep_end]
+        self._amulet_replace_ids = [int(x.get("id")) for x in rep_slice if isinstance(x, dict) and "id" in x]
+        # 重置 used 集合与游标
+        self._amulet_used_ids = set()
+        self._amulet_desktop_remain = 36
+        self._amulet_replace_cursor = 0
+
+    # --- 提供给 GUI 的文本构造 ---
+
+    def get_amulet_drawable_text(self) -> str:
+        """
+        显示青云之志“可摸段”(36张)里 **剩余的 N 张**：
+          - N = desktopRemain（来自服务端）
+          - 取 36 段的**尾部 N 张**（前面被摸走的在前面，尾部才是“还没到手”的）
+          - 分行显示：每行 9 张；第一行显示 N % 9 张（若余数为 0 则每行刚好 9 张）
+          - 不再使用 usedDesktop 进行空洞占位
+        """
+        if not (self._amulet_active and self._amulet_pool and self._amulet_draw_ids):
+            return ""
+
+        # id -> tile 映射
+        id2tile: dict[int, str] = {}
+        for obj in self._amulet_pool:
+            try:
+                id2tile[int(obj["id"])] = str(obj["tile"])
+            except Exception:
+                continue
+
+        # 剩余数量（夹在 0..36）
+        remain = max(0, min(int(self._amulet_desktop_remain or 0), len(self._amulet_draw_ids)))
+        if remain == 0:
+            header = "[可摸剩余 0/36]"
+            return header
+
+        # 取“可摸段”尾部 N 张
+        remain_ids = self._amulet_draw_ids[-remain:]
+        remain_tiles = [id2tile.get(pid, "?") for pid in remain_ids]
+
+        # 分行：第一行 r = remain % 9 张（若 r==0 则每行 9 张）
+        def _chunk_by9_tail_first(seq: list[str]) -> list[list[str]]:
+            n = len(seq)
+            r = n % 9
+            rows = []
+            i = 0
+            if r != 0:
+                rows.append(seq[:r])
+                i = r
+            while i < n:
+                rows.append(seq[i:i + 9])
+                i += 9
+            return rows
+
+        # 转 emoji（失败退化为 "9m" 文本）
+        def _as_emoji(ms_tile: str) -> str:
+            try:
+                from common.mj_helper import cvt_ms2mjai, MJAI_TILE_2_UNICODE
+                return MJAI_TILE_2_UNICODE[cvt_ms2mjai(ms_tile)]
+            except Exception:
+                return ms_tile
+
+        rows = _chunk_by9_tail_first(remain_tiles)
+        line_strs = [" ".join(_as_emoji(t) for t in row) for row in rows]
+
+        # 统计（仅统计剩余这 N 张；用于对照）
+        from collections import Counter
+        cnt = Counter(remain_tiles)
+        stat_line = " ".join(f"{_as_emoji(t)}×{n}" for t, n in sorted(cnt.items(), key=lambda kv: kv[0]))
+
+        header = f"[可摸剩余 {remain}/36]"
+        return "\n".join([header] + line_strs + [stat_line])
+
+    def get_amulet_replace_text(self) -> str:
+        """
+        渲染青云之志【换牌阶段】的待替换队列：
+          - 取尾部49张作为固定队列（服务器顺序），转成 emoji；
+          - 在队列中第 `cursor` 个位置插入光标“｜”（cursor==0 在最前，==len 在末尾）；
+          - 每 9 个自动换行；
+          - 光标不会超过剩余数量（min(cursor, len(queue))）。
+        非 stage2 或数据缺失时返回空串。
+        """
+        # 必须处于 amulet 且有队列
+        if not (self._amulet_active and self._amulet_pool and self._amulet_replace_ids):
+            return ""
+
+        # 读取 stage；仅在换牌阶段(stage==2)显示
+        try:
+            stage = int(self._amulet_info.get("stage", 0))
+        except Exception:
+            stage = 0
+        if stage != 2:
+            return ""
+
+        # id -> tile
+        id2tile: dict[int, str] = {}
+        for obj in self._amulet_pool:
+            try:
+                id2tile[int(obj["id"])] = str(obj["tile"])
+            except Exception:
+                continue
+
+        # 队列（固定49张顺序）
+        tiles: list[str] = [id2tile.get(i, "?") for i in self._amulet_replace_ids]
+
+        # 转 emoji
+        def _as_emoji(ms_tile: str) -> str:
+            try:
+                from common.mj_helper import cvt_ms2mjai, MJAI_TILE_2_UNICODE
+                return MJAI_TILE_2_UNICODE[cvt_ms2mjai(ms_tile)]
+            except Exception:
+                return ms_tile
+
+        emojis: list[str] = [_as_emoji(t) for t in tiles]
+
+        # 光标位置：已消耗数量；不超过当前队列长度
+        cur = int(self._amulet_replace_cursor or 0)
+        if cur < 0:
+            cur = 0
+        if cur > len(emojis):
+            cur = len(emojis)
+
+        # 在序列里插入光标"｜"（Unicode 全角竖线）
+        seq: list[str] = emojis[:]
+        seq.insert(cur, "｜")
+
+        # 自动换行交由 Label 自己处理
+        text_line = " ".join(seq)
+        header = f"[待替换 {cur}/{len(emojis)}]"
+        return f"{header}\n{text_line}"
+
     def _process_msg(self, msg:mitm.WSMessage):
         """ process websocket message from mitm server"""
-        
+
         if msg.type == mitm.WsType.START:
             LOGGER.debug("Websocket Flow started: %s", msg.flow_id)
-            
+
         elif msg.type == mitm.WsType.END:
             LOGGER.debug("Websocket Flow ended: %s", msg.flow_id)
             if msg.flow_id == self.game_flow_id:
@@ -351,7 +601,7 @@ class BotManager:
                 LOGGER.info("Lobby flow ended.")
                 self.lobby_flow_id = None
                 self.automation.on_exit_lobby()
-                
+
         elif msg.type == mitm.WsType.MESSAGE:
             # process ws message
             try:
@@ -367,52 +617,46 @@ class BotManager:
 
             if liqi_method in METHODS_TO_IGNORE:
                 ...
-            
+
             elif (liqi_type, liqi_method) == (liqi.MsgType.RES, liqi.LiqiMethod.oauth2Login):
                 # lobby login msg
                 if self.lobby_flow_id is None:  # record first time in lobby
                     LOGGER.info("Lobby oauth2Login msg: %s", liqimsg)
-                    LOGGER.info("Lobby login done. lobby flow ID = %s", msg.flow_id)                   
+                    LOGGER.info("Lobby login done. lobby flow ID = %s", msg.flow_id)
                     self.lobby_flow_id = msg.flow_id
-                    self.automation.on_lobby_login(liqimsg)                    
+                    self.automation.on_lobby_login(liqimsg)
                 else:
                     LOGGER.warning("Lobby flow exists %s, ignoring new lobby flow %s", self.lobby_flow_id, msg.flow_id)
-            
-            elif (liqi_type, liqi_method) == (liqi.MsgType.REQ, liqi.LiqiMethod.authGame):
-                # Game Start request msg: found game flow, initialize game state
-                if self.game_flow_id is None:
-                    LOGGER.info("authGame msg: %s", liqimsg)
-                    LOGGER.info("Game Started. Game Flow ID=%s", msg.flow_id)
-                    self.game_flow_id = msg.flow_id
-                    self.game_state = GameState(self.bot)    # create game state with bot
-                    self.game_state.input(liqimsg)      # authGame -> mjai:start_game, no reaction
-                    self.game_exception = None
-                    self.automation.on_enter_game()
-                else:
-                    LOGGER.warning("Game flow %s already started. ignoring new game flow %s", self.game_flow_id, msg.flow_id)
-                
-            elif msg.flow_id == self.game_flow_id:
-                # Game Flow Message (in-Game message)
-                # Feed msg to game_state for processing with AI bot
-                LOGGER.debug('Game msg: %s', str(liqimsg))
-                reaction = self.game_state.input(liqimsg)
-                if reaction:
-                    self._do_automation(reaction)
-                else:
-                    self._process_idle_automation(liqimsg)
-                # if self.game_state.is_game_ended:
-                #     self._process_end_game()
 
             elif 'amulet' in liqi_method.lower():
                 if liqi_type != liqi.MsgType.RES:
                     return
                 LOGGER.debug('Sky-High Ambition msg: %s', dump_liqi_msg_str(liqimsg))
                 if liqi_method == liqi.LiqiMethod.fetchAmuletActivityData:
-                    game = liqi_data['data']['game']
-                    if game is not None:
-                        LOGGER.debug('has old game data: %s', str(game))
-                    else:
-                        LOGGER.debug('has no old game data')
+                    self._amulet_active = True
+                    self._amulet_on_fetch_data(liqi_data)
+                elif liqi_method == liqi.LiqiMethod.amuletActivityUpgrade:
+                    self._amulet_active = True
+                    self._amulet_on_upgrade_events(liqi_data.get("events") or [])
+                elif liqi_method == liqi.LiqiMethod.amuletActivityOperate:
+                    self._amulet_active = True
+                    self._amulet_on_operate_events(liqi_data.get("events") or [])
+                elif liqi_method == liqi.LiqiMethod.amuletActivityGiveup:
+                    self._amulet_active = False
+                    self._amulet_pool = None
+                    self._amulet_draw_ids = []
+                    self._amulet_used_ids = set()
+                    self._amulet_desktop_remain = 0
+                    self._amulet_replace_ids = []
+                    self._amulet_replace_cursor = 0
+                    # 重置 GUI 简要信息
+                    self._amulet_info.update({
+                        'stage': 0,
+                        'hands': [],
+                        'desktop_remain': 0,
+                        'ended': False,
+                    })
+                return
 
 
             elif msg.flow_id == self.lobby_flow_id:
@@ -422,7 +666,34 @@ class BotManager:
 
             else:
                 LOGGER.debug('Other msg (ignored): %s', liqimsg)
-                
+
+    def _amulet_update_from_events(self, events: list[dict]) -> None:
+        """
+        从 amuletActivityOperate 的 events[] 更新青云之志的可观察状态。
+        仅抽取 GUI 需要的关键信息：stage / hands / desktop_remain / ended
+        """
+        for ev in events:
+            vc = ev.get("valueChanges", {}) or {}
+
+            # stage
+            if "stage" in vc:
+                self._amulet_info["stage"] = vc["stage"]
+
+            # round 内细项
+            rd = vc.get("round") or {}
+            # hands
+            hands = rd.get("hands")
+            if isinstance(hands, dict) and hands.get("dirty"):
+                self._amulet_info["hands"] = hands.get("value") or []
+            # desktopRemain
+            dr = rd.get("desktopRemain")
+            if isinstance(dr, dict) and dr.get("dirty"):
+                self._amulet_info["desktop_remain"] = dr.get("value", 0)
+
+            # ended
+            if "ended" in vc:
+                self._amulet_info["ended"] = bool(vc["ended"])
+
     def _process_idle_automation(self, liqimsg:dict):
         """ do some idle action based on liqi msg"""
         liqi_method = liqimsg['method']
@@ -433,7 +704,7 @@ class BotManager:
                 self.automation.automate_send_emoji()
         else:           # move mouse around randomly
             self.automation.automate_idle_mouse_move(0.05)
-        
+
     def _process_end_game(self):
         # End game processes
         # self.game_flow_id = None
@@ -442,8 +713,8 @@ class BotManager:
             self.browser.overlay_clear_guidance()
         self.game_exception = None
         self.automation.on_end_game()
-            
-    
+
+
     def _update_overlay_conditions_met(self) -> bool:
         if not self.st.enable_overlay:
             return False
@@ -452,8 +723,8 @@ class BotManager:
         if self.browser.is_page_normal() is False:
             return False
         return True
-    
-        
+
+
     def _update_overlay_guide(self):
         # Update overlay guide given pending reaction
         reaction = self.get_pending_reaction()
@@ -462,10 +733,10 @@ class BotManager:
             self.browser.overlay_update_guidance(guide, self.st.lan().OPTIONS_TITLE, options)
         else:
             self.browser.overlay_clear_guidance()
-            
-        
+
+
     def _update_overlay_botleft(self):
-        # update overlay bottom left text        
+        # update overlay bottom left text
         # maj copilot
         text = '😸' + self.st.lan().APP_TITLE
 
@@ -475,7 +746,7 @@ class BotManager:
             model_text += self.st.lan().MODEL + ": " + self.st.model_type
         else:
             model_text += self.st.lan().MODEL_NOT_LOADED
-        
+
         # autoplay
         if self.st.enable_automation:
             autoplay_text = '✅' + self.st.lan().AUTOPLAY + ': ' + self.st.lan().ON
@@ -498,10 +769,38 @@ class BotManager:
         elif self.is_in_game():
             line = '▶️' + self.st.lan().GAME_RUNNING
         else:
-            line = '🟢' + self.st.lan().READY_FOR_GAME            
-        
-        text = '\n'.join((text, model_text, autoplay_text, line))       
+            line = '🟢' + self.st.lan().READY_FOR_GAME
+
+        text = '\n'.join((text, model_text, autoplay_text, line))
         self.browser.overlay_update_botleft(text)
+
+    def is_in_amulet(self) -> bool:
+        return bool(self._amulet_active)
+
+    def get_amulet_info(self) -> dict | None:
+        # 返回浅拷贝，避免外部改内部
+        return dict(self._amulet_info) if self._amulet_active else None
+
+    def get_amulet_pending_action(self) -> dict | None:
+        return self._amulet_pending_action
+
+    def get_amulet_replace_queue(self) -> list[str]:
+        """返回换牌队列（尾部49张）对应的 tile 字符串列表，保持服务器给定顺序。
+        若当前无 Amulet 数据则返回空列表。"""
+        if not (self._amulet_active and self._amulet_pool and self._amulet_replace_ids):
+            return []
+        # 建立 id->tile 映射
+        id2tile: dict[int, str] = {}
+        for obj in self._amulet_pool:
+            try:
+                id2tile[int(obj["id"])] = str(obj["tile"])
+            except Exception:
+                continue
+        return [id2tile.get(pid, "?") for pid in self._amulet_replace_ids]
+
+    def get_amulet_replace_cursor(self) -> int:
+        """返回换牌队列游标（已消耗数量）。"""
+        return int(self._amulet_replace_cursor or 0)
 
     
     def _do_automation(self, reaction:dict):

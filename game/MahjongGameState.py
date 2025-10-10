@@ -4,6 +4,7 @@ and interfaces with AI bot to generate reactions.
 """
 import time
 
+from game.ILiqiHandler import ILiqiHandler
 from liqi import MsgType
 from liqi import LiqiProto, LiqiMethod, LiqiAction
 
@@ -47,7 +48,7 @@ class KyokuState:
         self.self_in_reach:bool = False     # if self is in reach state
         self.player_reach:list = [False]*4  # list of player reach states
 
-class GameState:
+class MahjongGameState(ILiqiHandler):
     """ Stores Majsoul game state and processes inputs outputs to/from Bot"""
 
     def __init__(self, bot:Bot) -> None:

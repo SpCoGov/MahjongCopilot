@@ -20,7 +20,7 @@ from common.utils import UiState, GAME_MODES
 
 from .img_proc import ImgTemp, GameVisual
 from .browser import GameBrowser
-from .game_state import GameInfo, GameState
+from .MahjongGameState import GameInfo, MahjongGameState
 
 
 class Positions:
@@ -241,7 +241,7 @@ class AutomationTask:
             raise NotImplementedError(f"Execution not implemented for step type {type(step)}")
         self.last_exe_time = time.time()
         
-    def start_action_steps(self, action_steps:Iterable[ActionStep], game_state:GameState = None):
+    def start_action_steps(self, action_steps:Iterable[ActionStep], game_state:MahjongGameState = None):
         """ start running action list/iterator in a thread"""
         if self.is_running():
             return
@@ -370,7 +370,7 @@ class Automation:
         return delay
      
         
-    def automate_action(self, mjai_action:dict, game_state:GameState) -> bool:
+    def automate_action(self, mjai_action:dict, game_state:MahjongGameState) -> bool:
         """ execute action given by the mjai message
         params:
             mjai_action(dict): mjai output action msg
@@ -483,7 +483,7 @@ class Automation:
         else:
             return -1
         
-    def automate_retry_pending(self, game_state:GameState):
+    def automate_retry_pending(self, game_state:MahjongGameState):
         """ retry pending action from game state"""
         if not self.can_automate(True, UiState.IN_GAME):
             return

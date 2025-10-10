@@ -5,7 +5,7 @@ class LanStr:
     LANGUAGE_NAME = 'English'
 
     # GUI
-    APP_TITLE = 'Mahjong Copilot'
+    APP_TITLE = 'Sky-High Ambition Copilot'
     START_BROWSER = "Start Web Client"
     WEB_OVERLAY = "Overlay"
     AUTOPLAY = "Autoplay"
@@ -17,7 +17,7 @@ class LanStr:
     LOADING = "Loading..."
     EXIT = "Exit"
     EIXT_CONFIRM = "Are you sure you want to exit?"
-    AI_OUTPUT = 'AI Guidance'
+    POOL_INFO = 'Pool Info'
     GAME_INFO = 'Game Info'    
     ON = "On"
     OFF = "Off"
@@ -139,7 +139,7 @@ class LanStrZHS(LanStr):
     LANGUAGE_NAME = '简体中文'
     
     # GUI
-    APP_TITLE = '麻将 Copilot'
+    APP_TITLE = '青云之志 Copilot'
     START_BROWSER = "启动网页客户端"
     WEB_OVERLAY = "网页 HUD"
     AUTOPLAY = "自动打牌"
@@ -151,7 +151,7 @@ class LanStrZHS(LanStr):
     LOADING = "加载中..."
     EXIT = "退出"
     EIXT_CONFIRM = "确定退出程序?"
-    AI_OUTPUT = 'AI 提示'
+    POOL_INFO = '牌山信息'
     GAME_INFO = '游戏信息'    
     ON = "开"
     OFF = "关"
